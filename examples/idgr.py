@@ -5,7 +5,7 @@ from os import system
 
 asm = ngc.compiler.NgCode(ngc.Arch.x86_64)
 
-system("gcc payloads/idgr.c -o payloads/idexe")
+system("gcc payloads/idgr.c -nostartfiles -o payloads/idexe")
 open("/tmp/me", "wb").write(
     open("payloads/idexe", "rb").read()
 )
@@ -23,8 +23,6 @@ asm.push("rdi")
 
 asm.mov("al", 0x3B)
 asm.syscall()
-
-asm.jmp("$")
 
 asm.section("data")
 
